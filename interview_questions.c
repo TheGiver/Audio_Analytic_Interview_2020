@@ -3,6 +3,7 @@
 #include <limits.h>
 #include <stdbool.h>
 #include <math.h>
+#include <string.h>
 
 /* Function Declarations */
 
@@ -36,12 +37,22 @@ typedef struct Person {
 } person;
 void calculate_sizeof_struct_Person(struct Person * person);
 
+/* Task: 
+    Given a sentence, split the input into individual words and print
+    each word on an individual line 
+*/
+void split_string_by_delim(char * str, char * delim);
+
+/*********************************************************/
+
 int main() {
-    struct Person p1 = {.age = 10, .name = "Faysal"};
-    struct Person * ptr = &p1;
-    calculate_sizeof_struct_Person(ptr);
+    char sent[30] = "I love hummus a lot";
+    char delim[2] = " ";
+    split_string_by_delim(sent, delim);
     return 0;
 }
+
+/*********************************************************/
 
 /**
  * Question: 
@@ -196,3 +207,16 @@ int count_char_occurrence(char * str, char targetChar) {
 void calculate_sizeof_struct_Person(struct Person * person) {
     fprintf(stdout, "Size: %lu\n", sizeof(*(person)));
 }
+
+/**
+ * Question:
+ * Given a sentence, split the input into individual words and print
+ * each word on an individual line
+*/
+void split_string_by_delim(char str[], char delim[]) {
+    char * token = strtok(str, delim);
+    while(token != NULL) {
+        fprintf(stdout, "%s\n", token);
+        token = strtok(NULL, delim);
+    }
+}   
