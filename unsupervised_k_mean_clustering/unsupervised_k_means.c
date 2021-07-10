@@ -3,14 +3,17 @@
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 
 
 /* DEFINITIONS */
-#define BUFFER_SIZE 4096
-#define DELIM ","
 #define EXPECTED_COMMAND_LINE_ARGS 3
+#define BUFFER_SIZE 4096
+#define OUTPUT_FILE "OUTPUT.TXT"
 #define SUCCESS 0
 #define FAILURE 1
+#define DELIM ","
+
 
 /* ERROR MESSAGES */
 #define CENTROID_FILE_DOES_NOT_EXIST_ERR_MSG "The centroid file chosen does not exist.\n"
@@ -18,6 +21,8 @@
 
 #define DATASET_FILE_DOES_NOT_EXIST_ERR_MSG "The dataset file chosen does not exist.\n"
 #define ALLOCATION_FAILURE_DATASET_ARR_ERR_MSG "Failed to allocate memory for the dataset array\n"
+
+#define OUTPUT_FILE_CREATION_ERR_MSG "Failure to create a file to persist the results.\n"
 
 
 /* STRUCTS */
@@ -38,6 +43,9 @@ as its name.
 typedef struct Centroid {
     struct Coordinates data_points;
     char name[20];
+    int no_of_belonging_data_points;
+    double sum_of_belonging_x_coordinates;
+    double sum_of_belonging_y_coordinates;
 } centroid;
 
 /*
@@ -59,7 +67,6 @@ const char * COMMAND_LINE_ARGS_ERR_MSG = "Expected Format:\n./unsupervised_k_mea
 /* VARIABLES */
 unsigned int total_data_points = 0;
 unsigned int total_centroids = 0;
-double total_error_metric = 0;
 
 
 /* DATA STRUCTURES */
@@ -69,11 +76,22 @@ data_point * dataset_arr = NULL;
 
 /* FUNCTION DECLARATIONS */
 bool is_command_line_args_valid(int argv, char* args[]);
+
 int load_centroids();
 int load_dataset();
+
+double cluster_data();
+void run_expectation_step(double * total_error_metric, bool * hasConverged);
+void run_maximisation_step();
+
+double calculate_euclidian_distance(data_point * d, centroid * c);
+int print_clustering_results(double total_error_metric);
+void reset_centroids_records();
+
 void free_memory();
 
 
+/* ENTRY POINT */
 int main(int argv, char* args[]) {
     if(!is_command_line_args_valid(argv, args)) {
         fprintf(stderr, "%s\n", COMMAND_LINE_ARGS_ERR_MSG);
@@ -87,6 +105,12 @@ int main(int argv, char* args[]) {
     if(load_dataset() != SUCCESS) {
         return EXIT_FAILURE;
     }
+
+    double total_error_metric = cluster_data();
+    
+    if(print_clustering_results(total_error_metric) != SUCCESS) {
+        return EXIT_FAILURE;
+    }    
 
     free_memory();
     return EXIT_SUCCESS;
@@ -115,6 +139,7 @@ bool is_command_line_args_valid(int argv, char* args[]) {
 
     return true;
 }
+
 
 /**
  * Load in the centroids from the dataset into the heap. The amount of 
@@ -189,6 +214,7 @@ int load_centroids() {
     return SUCCESS;
 }
 
+
 /**
  * Loading the dataset points 
 */
@@ -249,12 +275,195 @@ int load_dataset() {
     return SUCCESS;
 }
 
-/* */
 
-/* 
-free any dynamically allocated memory which includes the following:
-a. centroid_arr
-b. dataset_arr
+/**
+ * Run the k means algorithm  
+*/
+double cluster_data() {
+    double total_error_metric = 0;
+    bool hasConverged = false; 
+
+    while(true) {
+        run_expectation_step(&total_error_metric, &hasConverged);
+
+        if(hasConverged) {
+            break;
+        }
+
+        run_maximisation_step();
+    }
+
+    return total_error_metric;
+}
+
+/**
+ * Executing the expectation step which follows the following 
+ * pseudo-code:
+ * for each data point:
+ *     for each centroid available:
+ *          calculate the euclidian distance 
+ * 
+ * The aim is to locate the centroid with the shortest euclidian distance 
+ * with the data point for each data point. In addition, you will need to 
+ * keep track of the total error metric which is the sum of all the distances
+ * returned by calculate_euclidian_distance()
+*/
+void run_expectation_step(double * total_error_metric, bool * hasConverged) {
+    reset_centroids_records();
+
+    double temp_total_error_metric = 0;
+    for(int i = 0; i < total_data_points; i++) {
+        data_point * d = &dataset_arr[i];
+
+        double shortest_euclidian_distance;
+        int closest_centroid_index; 
+
+        for(int j = 0; j < total_centroids; j++) {
+            centroid * c = &centroid_arr[j];
+
+            if(j == 0) {
+                shortest_euclidian_distance = calculate_euclidian_distance(d, c);
+                closest_centroid_index = j; 
+            } else {
+                double temp = calculate_euclidian_distance(d, c);
+
+                if(temp < shortest_euclidian_distance) {
+                    shortest_euclidian_distance = temp;
+                    closest_centroid_index = j;
+                }
+            }
+        }
+
+        /* Record the closest centroid for the current data point */
+        d->centroid_index = closest_centroid_index;
+
+        /* 
+        Update the sums of coordinates at the closest centroid for the 
+        current data point as well as the total points belonging to that 
+        centroid
+        */
+        centroid * c = &centroid_arr[closest_centroid_index];
+        c->no_of_belonging_data_points++;
+        c->sum_of_belonging_x_coordinates += d->data_points.x;
+        c->sum_of_belonging_y_coordinates += d->data_points.y;
+
+        /* update the total_error_metric's value */
+        temp_total_error_metric += shortest_euclidian_distance;
+    }
+
+    /* 
+    Check whether the total error metric in this iteration as the same as 
+    the previous one. 
+    */
+    if(temp_total_error_metric == *(total_error_metric)) {
+        *(hasConverged) = true;
+    } else {
+        *(total_error_metric) = temp_total_error_metric;
+    }
+}
+
+
+/**
+ * Executing the maximisation step which follows the following
+ * pseudo-code:
+ * for each centroid in centroids_arr:
+ *      calculate the average x-coordinates of all 
+ *      belonging data points. 
+ * 
+ *      calculate the average y-coordinates of all 
+ *      belonging data points. 
+ * 
+ *      update the value of the centroid's x and y
+ *      coordinates
+*/
+void run_maximisation_step() {
+    for(int i = 0; i < total_centroids; i++) {
+        centroid * c = &centroid_arr[i];
+
+        /* Avoid division by zero (arithmetic error) */
+        if(c->no_of_belonging_data_points == 0) {
+            continue;
+        }
+
+        c->data_points.x = (c->sum_of_belonging_x_coordinates / c->no_of_belonging_data_points);
+        c->data_points.y = (c->sum_of_belonging_y_coordinates / c->no_of_belonging_data_points); 
+    }
+}
+
+
+/**
+ * Given a (d)ata point and a (c)entroid, measure the Euclidian Distance 
+ * using the following formula:
+ * dist = SQRT([x-Cx]^2 + [y-Cy]^2)
+ * 
+ * Possible improvement:
+ * Utilise bitwise operators to perform power operations as they are more 
+ * efficient.
+*/
+double calculate_euclidian_distance(data_point * d, centroid * c) {
+    double x = d->data_points.x, y = d->data_points.y;
+    double centroid_x = c->data_points.x, centroid_y = c->data_points.y;
+    double distance = sqrt(pow((x - centroid_x), 2) + pow((y - centroid_y), 2));
+
+    return distance;
+}
+
+
+/**
+ * A function to reset the values of the following records in the centroids:
+ * a. no_of_belonging_data_points
+ * b. sum_of_belonging_x_coordinates
+ * c. sum_of_belonging_y_coordinates
+ * 
+ * Note:
+ * could be improved by avoiding this iteration and adding a conditional 
+ * statement in the expectation step to check whether i = 0 or more and 
+ * updating the records accordingly. 
+*/
+void reset_centroids_records() {
+    for(int i = 0; i < total_centroids; i++) {
+        centroid * c = &centroid_arr[i];
+        c->no_of_belonging_data_points = 0;
+        c->sum_of_belonging_x_coordinates = 0;
+        c->sum_of_belonging_y_coordinates = 0;
+    }
+}
+
+
+/**
+ * Print the results of the file to a text file
+ * textfile name = OUTPUT_FILE
+*/
+int print_clustering_results(double total_error_metric) {
+    /* open the file for writing */
+    FILE * output_file = fopen(OUTPUT_FILE, "w");
+    if(output_file == NULL) {
+        fprintf(stderr, "%s", OUTPUT_FILE_CREATION_ERR_MSG);
+        return FAILURE;
+    }
+
+    /* write the total error metric rounded to 3 decimal places */
+    fprintf(output_file, "error = %.3f\n", total_error_metric);
+
+    /* 
+    iterate through the dataset and print the centroid that the data point
+    belongs to.
+    */
+    for(int i = 0; i < total_data_points; i++) {
+        data_point * d = &(dataset_arr[i]);
+        centroid * c = &(centroid_arr[d->centroid_index]);
+        fprintf(output_file, "%s\n", c->name);
+    }
+
+    /* closing the file */
+    fclose(output_file);
+    return SUCCESS;
+}
+
+/**
+ * free any dynamically allocated memory which includes the following:
+ * a. centroid_arr
+ * b. dataset_arr
 */
 void free_memory() {
     free(centroid_arr);
